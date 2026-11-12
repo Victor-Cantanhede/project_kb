@@ -1,0 +1,88 @@
+name: hero-factory
+
+x-api: &api
+  image: hero-factory-api:local
+  pull_policy: never
+  environment: &api-env
+    DATABASE_URL: mysql://hero:hero@mysql:3306/hero_factory
+    PORT: "3000"
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
+services:
+  mysql:
+    image: mysql:8.4
+    command: ["--default-time-zone=+00:00"]
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: hero_factory
+      MYSQL_USER: hero
+      MYSQL_PASSWORD: hero
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # TCP ping only answers after the init phase (the temporary init server has networking off).
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+
+  migrate:
+    image: hero-factory-api:local
+    build: ./api
+    command: ["sh", "-c", "node dist/db/migrate.js && node dist/db/seed.js"]
+    environment:
+      DATABASE_URL: mysql://hero:hero@mysql:3306/hero_factory
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  api1:
+    <<: *api
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api1
+
+  api2:
+    <<: *api
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api2
+
+  web:
+    build: ./web
+    ports:
+      - "${APP_PORT:-8088}:80"
+    depends_on:
+      api1:
+        condition: service_healthy
+      api2:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tests:
+    profiles: ["test"]
+    build:
+      context: ./api
+      target: test
+    environment:
+      NODE_ENV: test
+      DATABASE_URL_TEST: mysql://hero:hero@mysql:3306/hero_factory_test
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
+
