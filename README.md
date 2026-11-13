@@ -4,9 +4,39 @@ Sistema fullstack de gerenciamento de heróis e missões construído para operar
 
 ---
 
-## 1. Subir tudo com um comando
+## 1. Setup Rápido e Execução
 
-Em um clone novo do repositório (requer apenas Docker com Docker Compose):
+### Setup automatizado para desenvolvimento local (raiz do repositório)
+
+Para provisionar `api/.env` a partir de `api/.env.example`, subir o MySQL 8.4 via Docker, aguardar o healthcheck, instalar as dependências de `api/` e `web/`, aplicar as migrações SQL e executar o seed idempotente (100.000 heróis para benchmark + dados iniciais de heróis showcase, avatares, histórico de alterações, missões em todos os status e importações CSV) em um único comando:
+
+```bash
+npm run setup
+```
+
+*(Caso queira rodar apenas os dados iniciais showcase sem a massa de 100k heróis em um banco recém-migrado, execute `npm run seed:dev` na raiz.)*
+
+Depois do `npm run setup`, você pode rodar backend e frontend localmente com hot-reload em terminais separados:
+
+```bash
+# Terminal 1 — Backend API (http://localhost:3000)
+cd api
+npm run dev
+
+# Terminal 2 — Frontend Web (http://localhost:5173 com proxy /api -> localhost:3000)
+cd web
+npm run dev
+```
+
+Para restaurar o repositório ao estado limpo (derrubando containers/volumes Docker e removendo `dist/`, `*.tsbuildinfo`, `node_modules/` e `.env` gerados, preservando `.env.example`):
+
+```bash
+npm run clean
+```
+
+### Subir a stack completa em Docker (Nginx + `api1` + `api2`)
+
+Em um clone novo do repositório (requer apenas Docker com Docker Compose), ou via `npm run docker:up` na raiz:
 
 ```bash
 docker compose up -d --build
@@ -15,7 +45,7 @@ docker compose up -d --build
 O comando acima executa automaticamente, em ordem:
 1. **`mysql` (MySQL 8.4)**: inicializa o banco principal (`hero_factory`) e o banco isolado de testes (`hero_factory_test`) com collation `utf8mb4_0900_ai_ci` (case-insensitive e accent-insensitive nativo).
 2. **`migrate`**: aplica as migrações SQL (`api/migrations/001_initial.sql`) protegidas por lock distribuído (`GET_LOCK`) e executa o **seed idempotente de 100.000 heróis** (rodar novamente não duplica nenhum registro).
-3. **`api1` e `api2`**: duas instâncias independentes da API Node.js + TypeScript (Fastify) conectadas ao mesmo MySQL.
+3. **`api1` e `api2`**: duas instâncias independentes da API Node.js + TypeScript (NestJS 11 + Express) conectadas ao mesmo MySQL.
 4. **`web` (Nginx + React)**: serve o frontend estático e faz o balanceamento de carga round-robin das chamadas HTTP entre `api1` e `api2` em **um único endereço**.
 
 ### Endereço único
@@ -33,14 +63,16 @@ O comando acima executa automaticamente, em ordem:
 Pelo Docker (sem precisar de Node instalado na máquina):
 
 ```bash
+npm run docker:test
+# ou diretamente:
 docker compose --profile test run --rm tests
 ```
 
-Ou localmente a partir da pasta `api/` (com o container `mysql` rodando):
+Ou localmente pela raiz (com o container `mysql` rodando):
 
 ```bash
-cd api
-npm test
+npm test          # roda testes unitários + integração multi-instância da API e testes do Web
+npm run typecheck # valida TypeScript em api/ e web/
 ```
 
 > **Isolamento de banco de testes (Circuit Breaker)**: os testes de integração passam por um *circuit breaker* (`api/test/circuit-breaker.ts`) que bloqueia a execução caso `NODE_ENV=production`, caso `DATABASE_URL_TEST` não esteja definida ou caso seja idêntica a `DATABASE_URL` (`hero_factory`), garantindo que o banco de desenvolvimento com os 100 mil heróis nunca seja alterado pelos testes.
@@ -60,11 +92,11 @@ O script `api/src/scripts/bench.ts` dispara 20 requisições sequenciais (após 
 
 | Cenário | `min` | `avg` | `p95` | `max` | Instâncias atendidas | Meta |
 |---|---:|---:|---:|---:|---|---|
-| 1. Primeira página (`GET /api/heroes?limit=10`) | 1,9 ms | 3,4 ms | 11,4 ms | 11,4 ms | `api1`, `api2` | `< 300 ms` |
-| 2. Busca por nome sem acento (`?search=joao`) | 1,9 ms | 2,5 ms | 3,8 ms | 3,8 ms | `api1`, `api2` | `< 300 ms` |
-| 3. Busca por apelido sem acento (`?search=relampago`) | 1,7 ms | 2,1 ms | 2,6 ms | 2,6 ms | `api1`, `api2` | `< 300 ms` |
-| 4. Busca rara em 100k (`?search=Relampago%201`) | 26,8 ms | 28,0 ms | 33,6 ms | 33,6 ms | `api1`, `api2` | `< 300 ms` |
-| 5. Busca sem resultado (varredura total em 100k) | 28,7 ms | 29,6 ms | 30,3 ms | 30,3 ms | `api1`, `api2` | `< 300 ms` |
+| 1. Primeira página (`GET /api/heroes?limit=10`) | 2,0 ms | 3,5 ms | 10,0 ms | 10,0 ms | `api1`, `api2` | `< 300 ms` |
+| 2. Busca por nome sem acento (`?search=joao`) | 2,1 ms | 2,6 ms | 3,6 ms | 3,6 ms | `api1`, `api2` | `< 300 ms` |
+| 3. Busca por apelido sem acento (`?search=relampago`) | 1,9 ms | 2,3 ms | 3,8 ms | 3,8 ms | `api1`, `api2` | `< 300 ms` |
+| 4. Busca rara em 100k (`?search=Relampago%201`) | 26,1 ms | 27,6 ms | 29,6 ms | 29,6 ms | `api1`, `api2` | `< 300 ms` |
+| 5. Busca sem resultado (varredura total em 100k) | 29,7 ms | 30,5 ms | 34,1 ms | 34,1 ms | `api1`, `api2` | `< 300 ms` |
 
 **Por que é rápido**:
 - A tabela `heroes` possui o índice composto de cobertura `idx_heroes_list (deleted_at, created_at DESC, id DESC, name, nickname)` com collation `utf8mb4_0900_ai_ci` (insensível a maiúsculas e acentos), consultado via *deferred join*.
@@ -174,21 +206,29 @@ Qualquer erro da API responde com o envelope padronizado abaixo e código HTTP c
 
 ---
 
-## 5. Arquitetura (Modular Monolith, SOLID & Strict TypeScript)
+## 5. Arquitetura (NestJS 11 + React Feature-Based, SOLID & Strict TypeScript)
 
-O backend (`api/src/`) segue **Modular Monolith com Clean Architecture Pragmática**:
+O backend (`api/src/`) segue **NestJS 11 com Modular Monolith + Clean Architecture Pragmática** (`core/` + `features/`):
 
 ```text
 api/src/
-├── modules/
-│   ├── heroes/          # Bounded Context de Heróis e Histórico (domain, application, infrastructure, index.ts)
-│   ├── missions/        # Bounded Context de Missões e Escalação (comunica com heroes apenas via facade pública)
-│   ├── imports/         # Bounded Context de Importação CSV em segundo plano
-│   └── avatars/         # Bounded Context de Upload de Avatares
-└── shared/
-    ├── kernel/          # Branded types, DomainError, paginação keyset, validação Zod
-    └── infra/           # Pool MySQL e gerenciador de transações READ COMMITTED
+├── core/
+│   ├── database/        # DatabaseModule.forRoot(pool), MysqlDatabaseService e transações READ COMMITTED
+│   ├── errors/          # DomainError e mapeamento HTTP
+│   ├── observability/   # HttpExceptionFilter, RequestLoggerMiddleware e AsyncLocalStorage
+│   ├── pagination/      # Cursor keyset determinístico
+│   └── security/        # ValidationPipe global, multipart e sanitização de logs
+└── features/
+    ├── health/          # Healthcheck (/health, /api/health)
+    ├── heroes/          # Bounded Context de Heróis e Histórico (domain, application, infrastructure, presentation, index.ts)
+    ├── missions/        # Bounded Context de Missões e Escalação (comunica com heroes via HeroFacadeService)
+    ├── imports/         # Bounded Context de Importação CSV em segundo plano
+    └── avatars/         # Bounded Context de Upload e leitura de Avatares
 ```
 
-- **Zero SQL `JOIN` entre módulos**: cada módulo é dono exclusivo de suas tabelas; `missions` consulta `heroes` exclusivamente pela facade pública `api/src/modules/heroes/index.ts`.
-- **TypeScript estrito**: zero `any`, zero non-null assertions (`!`), validação de borda com Zod em todas as entradas HTTP e leituras do MySQL, e estados assíncronos no frontend modelados com **Discriminated Unions** (`status: 'loading' | 'error' | 'success'`) verificadas exaustivamente com `never`.
+O frontend (`web/src/`) segue **React Feature-Based** com `lib/` (cliente HTTP, utilitários e cópia de negócio), `components/` (`layout/` e `ui/`) e `features/` (`heroes`, `missions`, `imports`) isolados por domínio.
+
+Na raiz do repositório, [package.json](file:///c:/Users/victo/dev/testes/mid-level-test/package.json) e [scripts/](file:///c:/Users/victo/dev/testes/mid-level-test/scripts) (`setup.mjs` e `clean.mjs`) orquestram o provisionamento e a limpeza completa do ambiente.
+
+- **Zero SQL `JOIN` entre features**: cada feature é dona exclusiva de suas tabelas; `missions` consulta `heroes` exclusivamente pela facade pública `HeroFacadeService` (`api/src/features/heroes/index.ts`).
+- **TypeScript estrito**: zero `any`, zero non-null assertions (`!`), validação de borda com DTOs (`class-validator` + `ValidationPipe`) na API e `zod` nas leituras do MySQL, e estados assíncronos no frontend modelados com **Discriminated Unions** (`status: 'loading' | 'error' | 'success'`) verificadas exaustivamente com `never`.

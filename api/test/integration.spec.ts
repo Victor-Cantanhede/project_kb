@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Pool } from 'mysql2/promise';
 import { z } from 'zod';
-import { buildApp, type AppInstance } from '../src/app.js';
+import { createNestApp, type AppInstance } from '../src/app-bootstrap.js';
 import { runMigrations } from '../src/db/migrate.js';
 import { seedHeroes } from '../src/db/seed.js';
-import { createPool, execute } from '../src/shared/infra/db.js';
+import { createPool, execute } from '../src/core/database/mysql-database.service.js';
 import { assertSafeTestDatabase } from './circuit-breaker.js';
 
 // Mandatory fail-safe circuit breaker before any connection or migration
@@ -81,10 +81,8 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
     await runMigrations(TEST_DB_URL);
     pool1 = createPool(TEST_DB_URL, 10);
     pool2 = createPool(TEST_DB_URL, 10);
-    instance1 = buildApp(pool1, 'api1');
-    instance2 = buildApp(pool2, 'api2');
-    await instance1.app.ready();
-    await instance2.app.ready();
+    instance1 = await createNestApp(pool1, 'api1');
+    instance2 = await createNestApp(pool2, 'api2');
   });
 
   beforeEach(async () => {
@@ -97,10 +95,8 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
   });
 
   afterAll(async () => {
-    await instance1.imports.waitForAll();
-    await instance2.imports.waitForAll();
-    await instance1.app.close();
-    await instance2.app.close();
+    await instance1.close();
+    await instance2.close();
     await pool1.end();
     await pool2.end();
   });
@@ -126,7 +122,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       }
 
       // Act — Search "joao" without accent or uppercase
-      const searchRes = await instance1.app.inject({
+      const searchRes = await instance1.inject({
         method: 'GET',
         url: '/heroes?search=joao',
       });
@@ -137,7 +133,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       let cursor: string | null = null;
       do {
         const url: string = cursor ? `/heroes?limit=2&cursor=${encodeURIComponent(cursor)}` : '/heroes?limit=2';
-        const pageRes = await instance2.app.inject({ method: 'GET', url });
+        const pageRes = await instance2.inject({ method: 'GET', url });
         const page = heroPageSchema.parse(pageRes.json());
         collectedIds.push(...page.data.map((h) => h.id));
         cursor = page.next_cursor;
@@ -153,7 +149,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
 
     it('should record field-by-field history on edit, deactivation, and activation, with filtering', async () => {
       // Arrange
-      const createRes = await instance1.app.inject({
+      const createRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         payload: {
@@ -167,19 +163,19 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       const created = heroResponseSchema.parse(createRes.json());
 
       // Act
-      await instance1.app.inject({
+      await instance1.inject({
         method: 'PATCH',
         url: `/heroes/${created.id}`,
         payload: { nickname: 'Hulk Verde', universe: 'Marvel 616', version: created.version },
       });
-      await instance2.app.inject({ method: 'POST', url: `/heroes/${created.id}/deactivate` });
-      await instance1.app.inject({ method: 'POST', url: `/heroes/${created.id}/activate` });
+      await instance2.inject({ method: 'POST', url: `/heroes/${created.id}/deactivate` });
+      await instance1.inject({ method: 'POST', url: `/heroes/${created.id}/activate` });
 
-      const allHistoryRes = await instance2.app.inject({
+      const allHistoryRes = await instance2.inject({
         method: 'GET',
         url: `/heroes/${created.id}/history`,
       });
-      const nickHistoryRes = await instance1.app.inject({
+      const nickHistoryRes = await instance1.inject({
         method: 'GET',
         url: `/heroes/${created.id}/history?field=nickname`,
       });
@@ -195,7 +191,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
 
     it('should hide soft-deleted heroes from list and search while preserving their nickname in missions', async () => {
       // Arrange
-      const heroRes = await instance1.app.inject({
+      const heroRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         payload: {
@@ -208,7 +204,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       });
       const hero = heroResponseSchema.parse(heroRes.json());
 
-      const missionRes = await instance1.app.inject({
+      const missionRes = await instance1.inject({
         method: 'POST',
         url: '/missions',
         payload: {
@@ -219,24 +215,24 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       });
       const mission = missionResponseSchema.parse(missionRes.json());
 
-      await instance1.app.inject({
+      await instance1.inject({
         method: 'POST',
         url: `/missions/${mission.id}/heroes`,
         payload: { hero_id: hero.id },
       });
 
       // Act — Delete the hero
-      const deleteRes = await instance2.app.inject({
+      const deleteRes = await instance2.inject({
         method: 'DELETE',
         url: `/heroes/${hero.id}`,
       });
-      const getHeroRes = await instance1.app.inject({ method: 'GET', url: `/heroes/${hero.id}` });
-      const getHeroMissionsRes = await instance1.app.inject({
+      const getHeroRes = await instance1.inject({ method: 'GET', url: `/heroes/${hero.id}` });
+      const getHeroMissionsRes = await instance1.inject({
         method: 'GET',
         url: `/heroes/${hero.id}/missions`,
       });
-      const listHeroesRes = await instance1.app.inject({ method: 'GET', url: '/heroes?search=Natasha' });
-      const getMissionRes = await instance2.app.inject({ method: 'GET', url: `/missions/${mission.id}` });
+      const listHeroesRes = await instance1.inject({ method: 'GET', url: '/heroes?search=Natasha' });
+      const getMissionRes = await instance2.inject({ method: 'GET', url: `/missions/${mission.id}` });
 
       // Assert
       expect(deleteRes.statusCode).toBe(204);
@@ -249,7 +245,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
 
     it('should allow adjacent mission schedules (10h-12h and 12h-14h) and freeing schedule after mission finishes', async () => {
       // Arrange
-      const thorRes = await instance1.app.inject({
+      const thorRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         payload: {
@@ -262,7 +258,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       });
       const thor = heroResponseSchema.parse(thorRes.json());
 
-      const missionARes = await instance1.app.inject({
+      const missionARes = await instance1.inject({
         method: 'POST',
         url: '/missions',
         payload: {
@@ -273,7 +269,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       });
       const missionA = missionResponseSchema.parse(missionARes.json());
 
-      const missionCRes = await instance1.app.inject({
+      const missionCRes = await instance1.inject({
         method: 'POST',
         url: '/missions',
         payload: {
@@ -284,7 +280,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       });
       const missionC = missionResponseSchema.parse(missionCRes.json());
 
-      const missionBRes = await instance1.app.inject({
+      const missionBRes = await instance1.inject({
         method: 'POST',
         url: '/missions',
         payload: {
@@ -296,27 +292,27 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       const missionB = missionResponseSchema.parse(missionBRes.json());
 
       // Act — Assign Thor to A (10-12) and C (12-14)
-      const assignARes = await instance1.app.inject({
+      const assignARes = await instance1.inject({
         method: 'POST',
         url: `/missions/${missionA.id}/heroes`,
         payload: { hero_id: thor.id },
       });
-      const assignCRes = await instance2.app.inject({
+      const assignCRes = await instance2.inject({
         method: 'POST',
         url: `/missions/${missionC.id}/heroes`,
         payload: { hero_id: thor.id },
       });
 
       // Start and finish both A and C, then assign Thor to B (11-13)
-      await instance1.app.inject({ method: 'POST', url: `/missions/${missionA.id}/start` });
-      await instance1.app.inject({
+      await instance1.inject({ method: 'POST', url: `/missions/${missionA.id}/start` });
+      await instance1.inject({
         method: 'POST',
         url: `/missions/${missionA.id}/finish`,
         payload: { result: 'succeeded' },
       });
-      await instance2.app.inject({ method: 'POST', url: `/missions/${missionC.id}/cancel` });
+      await instance2.inject({ method: 'POST', url: `/missions/${missionC.id}/cancel` });
 
-      const assignBRes = await instance1.app.inject({
+      const assignBRes = await instance1.inject({
         method: 'POST',
         url: `/missions/${missionB.id}/heroes`,
         payload: { hero_id: thor.id },
@@ -339,7 +335,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       ].join('\n');
 
       // Act — First import on api1
-      const startRes = await instance1.app.inject({
+      const startRes = await instance1.inject({
         method: 'POST',
         url: '/imports/heroes',
         payload: { filename: 'lote1.csv', csv },
@@ -348,21 +344,21 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       await instance1.imports.waitForAll();
 
       // Poll status from api2
-      const statusRes = await instance2.app.inject({
+      const statusRes = await instance2.inject({
         method: 'GET',
         url: `/imports/heroes/${initialJob.id}`,
       });
       const completedJob = importResponseSchema.parse(statusRes.json());
 
       // Re-import the exact same CSV on api2
-      const secondRes = await instance2.app.inject({
+      const secondRes = await instance2.inject({
         method: 'POST',
         url: '/imports/heroes',
         payload: { filename: 'lote1-repetido.csv', csv },
       });
       const secondJobId = importResponseSchema.parse(secondRes.json()).id;
       await instance2.imports.waitForAll();
-      const secondStatusRes = await instance1.app.inject({
+      const secondStatusRes = await instance1.inject({
         method: 'GET',
         url: `/imports/heroes/${secondJobId}`,
       });
@@ -398,9 +394,9 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       const missingId = '00000000-0000-4000-8000-000000000999';
 
       // Act
-      const notFoundHero = await instance1.app.inject({ method: 'GET', url: `/heroes/${missingId}` });
-      const notFoundMission = await instance2.app.inject({ method: 'GET', url: `/missions/${missingId}` });
-      const badCreate = await instance1.app.inject({
+      const notFoundHero = await instance1.inject({ method: 'GET', url: `/heroes/${missingId}` });
+      const notFoundMission = await instance2.inject({ method: 'GET', url: `/missions/${missingId}` });
+      const badCreate = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         payload: { name: '   ', nickname: '', date_of_birth: '2099-01-01', universe: '', main_power: '' },
@@ -416,14 +412,14 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
         expect.arrayContaining(['name', 'nickname', 'date_of_birth', 'universe', 'main_power']),
       );
 
-      const missingHeroMissions = await instance1.app.inject({
+      const missingHeroMissions = await instance1.inject({
         method: 'GET',
         url: `/heroes/${missingId}/missions`,
       });
       expect(missingHeroMissions.statusCode).toBe(404);
       expect(errorResponseSchema.parse(missingHeroMissions.json()).error.code).toBe('HERO_NOT_FOUND');
 
-      const invalidHeroMissions = await instance1.app.inject({
+      const invalidHeroMissions = await instance1.inject({
         method: 'GET',
         url: '/heroes/not-a-uuid/missions',
       });
@@ -446,7 +442,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
         oversizedAvatar,
         Buffer.from(`\r\n--${boundary}--\r\n`),
       ]);
-      const avatarTooBigRes = await instance1.app.inject({
+      const avatarTooBigRes = await instance1.inject({
         method: 'POST',
         url: '/avatars',
         headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
@@ -456,7 +452,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       expect(errorResponseSchema.parse(avatarTooBigRes.json()).error.code).toBe('FILE_TOO_LARGE');
 
       // Malformed multipart (missing boundary & truncated body) -> 400 INVALID_PAYLOAD (never 500)
-      const missingBoundaryRes = await instance2.app.inject({
+      const missingBoundaryRes = await instance2.inject({
         method: 'POST',
         url: '/avatars',
         headers: { 'content-type': 'multipart/form-data' },
@@ -465,7 +461,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       expect(missingBoundaryRes.statusCode).toBe(400);
       expect(errorResponseSchema.parse(missingBoundaryRes.json()).error.code).toBe('INVALID_PAYLOAD');
 
-      const truncatedMultipartRes = await instance2.app.inject({
+      const truncatedMultipartRes = await instance2.inject({
         method: 'POST',
         url: '/avatars',
         headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
@@ -475,7 +471,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       expect(errorResponseSchema.parse(truncatedMultipartRes.json()).error.code).toBe('INVALID_PAYLOAD');
 
       // Prototype violation in multipart -> 400 INVALID_PAYLOAD
-      const protoRes = await instance2.app.inject({
+      const protoRes = await instance2.inject({
         method: 'POST',
         url: '/avatars',
         headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
@@ -485,7 +481,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       expect(errorResponseSchema.parse(protoRes.json()).error.code).toBe('INVALID_PAYLOAD');
 
       // Oversized JSON (> 15 MB bodyLimit) -> 413 FILE_TOO_LARGE
-      const oversizedJsonRes = await instance1.app.inject({
+      const oversizedJsonRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         headers: { 'content-type': 'application/json' },
@@ -507,7 +503,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
         validPng,
         Buffer.from(`\r\n--${boundary}--\r\n`),
       ]);
-      const multiFileRes = await instance2.app.inject({
+      const multiFileRes = await instance2.inject({
         method: 'POST',
         url: '/avatars',
         headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
@@ -517,7 +513,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       expect(errorResponseSchema.parse(multiFileRes.json()).error.code).toBe('INVALID_PAYLOAD');
 
       // Malformed JSON -> 400 INVALID_PAYLOAD
-      const malformedJsonRes = await instance1.app.inject({
+      const malformedJsonRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         headers: { 'content-type': 'application/json' },
@@ -529,7 +525,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
 
     it('should forbid editing an inactive hero or assigning an inactive hero to a mission', async () => {
       // Arrange
-      const createRes = await instance1.app.inject({
+      const createRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         payload: {
@@ -541,9 +537,9 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
         },
       });
       const hero = heroResponseSchema.parse(createRes.json());
-      await instance1.app.inject({ method: 'POST', url: `/heroes/${hero.id}/deactivate` });
+      await instance1.inject({ method: 'POST', url: `/heroes/${hero.id}/deactivate` });
 
-      const missionRes = await instance1.app.inject({
+      const missionRes = await instance1.inject({
         method: 'POST',
         url: '/missions',
         payload: {
@@ -555,12 +551,12 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       const mission = missionResponseSchema.parse(missionRes.json());
 
       // Act
-      const editInactiveRes = await instance2.app.inject({
+      const editInactiveRes = await instance2.inject({
         method: 'PATCH',
         url: `/heroes/${hero.id}`,
         payload: { nickname: 'Mago Supremo', version: 2 },
       });
-      const assignInactiveRes = await instance2.app.inject({
+      const assignInactiveRes = await instance2.inject({
         method: 'POST',
         url: `/missions/${mission.id}/heroes`,
         payload: { hero_id: hero.id },
@@ -575,7 +571,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
 
     it('should forbid starting an empty mission or changing heroes after mission has started', async () => {
       // Arrange
-      const heroRes = await instance1.app.inject({
+      const heroRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         payload: {
@@ -588,7 +584,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       });
       const hero = heroResponseSchema.parse(heroRes.json());
 
-      const missionRes = await instance1.app.inject({
+      const missionRes = await instance1.inject({
         method: 'POST',
         url: '/missions',
         payload: {
@@ -600,19 +596,19 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       const mission = missionResponseSchema.parse(missionRes.json());
 
       // Act — Try starting with 0 heroes
-      const emptyStartRes = await instance1.app.inject({
+      const emptyStartRes = await instance1.inject({
         method: 'POST',
         url: `/missions/${mission.id}/start`,
       });
 
       // Assign hero, start mission, then try removing hero while in_progress
-      await instance1.app.inject({
+      await instance1.inject({
         method: 'POST',
         url: `/missions/${mission.id}/heroes`,
         payload: { hero_id: hero.id },
       });
-      await instance1.app.inject({ method: 'POST', url: `/missions/${mission.id}/start` });
-      const removeAfterStartRes = await instance2.app.inject({
+      await instance1.inject({ method: 'POST', url: `/missions/${mission.id}/start` });
+      const removeAfterStartRes = await instance2.inject({
         method: 'DELETE',
         url: `/missions/${mission.id}/heroes/${hero.id}`,
       });
@@ -639,13 +635,13 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
 
       // Act — Simultaneous double click routed to api1 and api2
       const [res1, res2] = await Promise.all([
-        instance1.app.inject({
+        instance1.inject({
           method: 'POST',
           url: '/heroes',
           headers: { 'idempotency-key': idempotencyKey },
           payload,
         }),
-        instance2.app.inject({
+        instance2.inject({
           method: 'POST',
           url: '/heroes',
           headers: { 'idempotency-key': idempotencyKey },
@@ -654,14 +650,14 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       ]);
 
       // Act — Retry after network drop with the same Idempotency-Key
-      const retryRes = await instance2.app.inject({
+      const retryRes = await instance2.inject({
         method: 'POST',
         url: '/heroes',
         headers: { 'idempotency-key': idempotencyKey },
         payload,
       });
 
-      const listRes = await instance1.app.inject({ method: 'GET', url: '/heroes' });
+      const listRes = await instance1.inject({ method: 'GET', url: '/heroes' });
       const list = heroPageSchema.parse(listRes.json());
 
       // Assert
@@ -677,7 +673,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
 
     it('should detect concurrent edits (Ana & Bruno) via optimistic locking and allow merging without data loss', async () => {
       // Arrange — Create Hulk (version 1)
-      const createRes = await instance1.app.inject({
+      const createRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         payload: {
@@ -691,7 +687,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       const hulkV1 = heroResponseSchema.parse(createRes.json());
 
       // Act — 1. Ana changes nickname to "Hulk Verde" on api1 (succeeds -> version 2)
-      const anaRes = await instance1.app.inject({
+      const anaRes = await instance1.inject({
         method: 'PATCH',
         url: `/heroes/${hulkV1.id}`,
         payload: { nickname: 'Hulk Verde', version: hulkV1.version },
@@ -699,14 +695,14 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       const hulkV2 = heroResponseSchema.parse(anaRes.json());
 
       // Act — 2. Bruno changes universe to "Marvel 616" on api2 still holding version 1 (conflicts!)
-      const brunoConflictRes = await instance2.app.inject({
+      const brunoConflictRes = await instance2.inject({
         method: 'PATCH',
         url: `/heroes/${hulkV1.id}`,
         payload: { universe: 'Marvel 616', version: hulkV1.version },
       });
 
       // Act — 3. Bruno refreshes from conflict details and applies his universe change onto version 2
-      const brunoMergedRes = await instance2.app.inject({
+      const brunoMergedRes = await instance2.inject({
         method: 'PATCH',
         url: `/heroes/${hulkV1.id}`,
         payload: { universe: 'Marvel 616', version: hulkV2.version },
@@ -726,7 +722,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
 
     it('should allow ONLY ONE assignment when Ana (api1) and Bruno (api2) assign Thor to overlapping missions at the same instant', async () => {
       // Arrange
-      const thorRes = await instance1.app.inject({
+      const thorRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         payload: {
@@ -739,7 +735,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       });
       const thor = heroResponseSchema.parse(thorRes.json());
 
-      const missionARes = await instance1.app.inject({
+      const missionARes = await instance1.inject({
         method: 'POST',
         url: '/missions',
         payload: {
@@ -750,7 +746,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       });
       const missionA = missionResponseSchema.parse(missionARes.json());
 
-      const missionBRes = await instance2.app.inject({
+      const missionBRes = await instance2.inject({
         method: 'POST',
         url: '/missions',
         payload: {
@@ -763,12 +759,12 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
 
       // Act — Ana on api1 and Bruno on api2 assign Thor simultaneously
       const [anaAssign, brunoAssign] = await Promise.all([
-        instance1.app.inject({
+        instance1.inject({
           method: 'POST',
           url: `/missions/${missionA.id}/heroes`,
           payload: { hero_id: thor.id },
         }),
-        instance2.app.inject({
+        instance2.inject({
           method: 'POST',
           url: `/missions/${missionB.id}/heroes`,
           payload: { hero_id: thor.id },
@@ -791,7 +787,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
       const forgedDate = '1999-01-01T00:00:00.000Z';
 
       // Act
-      const createRes = await instance1.app.inject({
+      const createRes = await instance1.inject({
         method: 'POST',
         url: '/heroes',
         payload: {
@@ -806,7 +802,7 @@ describe('Integration Suite — Multi-Instance API & MySQL 8 Concurrency Guarant
         },
       });
       const created = heroResponseSchema.parse(createRes.json());
-      const wildcardSearchRes = await instance2.app.inject({
+      const wildcardSearchRes = await instance2.inject({
         method: 'GET',
         url: '/heroes?search=%25', // literal "%"
       });

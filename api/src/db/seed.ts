@@ -1,7 +1,8 @@
 import { pathToFileURL } from 'node:url';
 import type { Pool } from 'mysql2/promise';
 import { z } from 'zod';
-import { createPool, execute, selectRows } from '../shared/infra/db.js';
+import { createPool, execute, selectRows } from '../core/database/mysql-database.service.js';
+import { seedDevData } from './seed-dev.js';
 
 export const SEED_TOTAL = 100_000;
 const BATCH_SIZE = 1_000;
@@ -58,7 +59,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const pool = createPool(z.string().min(1).parse(process.env.DATABASE_URL), 2);
   const startedAt = performance.now();
   const inserted = await seedHeroes(pool);
-  console.log(`Seed: ${inserted} heróis novos em ${Math.round(performance.now() - startedAt)} ms (alvo: ${SEED_TOTAL}).`);
+  const devSummary = await seedDevData(pool);
+  console.log(
+    `Seed: ${inserted} heróis em lote + ${devSummary.heroes} heróis showcase, ` +
+      `${devSummary.missions} missões, ${devSummary.avatars} avatares e ${devSummary.imports} importações ` +
+      `em ${Math.round(performance.now() - startedAt)} ms.`,
+  );
   await pool.end();
 }
 

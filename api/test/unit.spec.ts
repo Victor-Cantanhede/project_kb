@@ -1,38 +1,50 @@
+import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
-import { DomainError } from '../src/shared/kernel/errors.js';
-import { decodeCursor, encodeCursor, toPage } from '../src/shared/kernel/pagination.js';
-import { parseInput } from '../src/shared/kernel/validation.js';
+import { DomainError } from '../src/core/errors/domain.exception.js';
+import { decodeCursor, encodeCursor, toPage } from '../src/core/pagination/keyset-pagination.js';
+import { createValidationPipe } from '../src/core/security/validation-pipe.factory.js';
 import {
-  buildHeroCreateSchema,
-  buildHeroPatchSchema,
+  CreateHeroDto,
+  CreateHeroUseCase,
   diffHero,
   HERO_LIMITS,
+  HeroEntity,
+  type IHeroRepository,
   isCalendarDay,
   todayIn,
-  toHeroId,
-  type Hero,
-} from '../src/modules/heroes/index.js';
+  UpdateHeroDto,
+} from '../src/features/heroes/index.js';
 import {
   assertCanCancel,
   assertCanFinish,
   assertCanModifyRoster,
   assertCanStart,
   doPeriodsOverlap,
-  missionCreateSchema,
-} from '../src/modules/missions/index.js';
+} from '../src/features/missions/domain/utils/mission-schedule.util.js';
+import { CreateMissionDto } from '../src/features/missions/infrastructure/dtos/create-mission.dto.js';
 import {
   MAX_CSV_ROWS,
   validateAndExtractCsvRows,
   validateCsvRow,
-} from '../src/modules/imports/index.js';
-import { detectImageMimeType, MAX_AVATAR_BYTES } from '../src/modules/avatars/index.js';
+} from '../src/features/imports/domain/utils/csv-parser.util.js';
+import { detectImageMimeType, MAX_AVATAR_BYTES } from '../src/features/avatars/index.js';
 import { assertSafeTestDatabase } from './circuit-breaker.js';
+
+const pipe = createValidationPipe();
+
+async function validateDto<T extends object>(
+  metatype: new () => T,
+  payload: Record<string, unknown>,
+): Promise<T> {
+  return (await pipe.transform(payload, {
+    type: 'body',
+    metatype,
+  })) as T;
+}
 
 describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', () => {
   describe('Block 1: Happy Path Specifications', () => {
-    it('should validate and trim a legitimate hero creation payload', () => {
-      // Arrange
-      const schema = buildHeroCreateSchema('2026-11-12');
+    it('should validate and trim a legitimate hero creation payload', async () => {
       const rawPayload = {
         name: '  Robert Bruce Banner  ',
         nickname: '  Hulk ',
@@ -42,11 +54,9 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
         avatar_url: 'https://exemplo.com/hulk.jpg',
       };
 
-      // Act
-      const parsed = parseInput(schema, rawPayload);
+      const parsed = await validateDto(CreateHeroDto, rawPayload);
 
-      // Assert
-      expect(parsed).toEqual({
+      expect(parsed).toMatchObject({
         name: 'Robert Bruce Banner',
         nickname: 'Hulk',
         date_of_birth: '1962-04-10',
@@ -57,9 +67,8 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
     });
 
     it('should compute exact field diffs when editing a hero', () => {
-      // Arrange
-      const existingHero: Hero = {
-        id: toHeroId('e314636e-1ca6-4925-a0e7-da5eb5ae2403'),
+      const existingHero = new HeroEntity({
+        id: 'e314636e-1ca6-4925-a0e7-da5eb5ae2403',
         name: 'Robert Bruce Banner',
         nickname: 'Hulk',
         date_of_birth: '1962-04-10',
@@ -70,16 +79,13 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
         version: 1,
         created_at: new Date('2024-09-18T21:41:43.120Z'),
         updated_at: new Date('2024-09-18T21:41:43.120Z'),
-      };
+      });
 
-      // Act
       const changes = diffHero(existingHero, {
         nickname: 'Hulk Verde',
         universe: 'Marvel',
-        version: 1,
       });
 
-      // Assert
       expect(changes).toEqual([
         {
           field: 'nickname',
@@ -90,7 +96,6 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
     });
 
     it('should allow adjacent mission periods where one ends at 12:00 and the next starts at 12:00', () => {
-      // Arrange
       const missionAStart = new Date('2026-11-03T10:00:00.000Z');
       const missionAEnd = new Date('2026-11-03T12:00:00.000Z');
       const missionBStart = new Date('2026-11-03T11:00:00.000Z');
@@ -98,28 +103,23 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
       const missionCStart = new Date('2026-11-03T12:00:00.000Z');
       const missionCEnd = new Date('2026-11-03T14:00:00.000Z');
 
-      // Act
       const overlapsB = doPeriodsOverlap(missionAStart, missionAEnd, missionBStart, missionBEnd);
       const overlapsC = doPeriodsOverlap(missionAStart, missionAEnd, missionCStart, missionCEnd);
 
-      // Assert
       expect(overlapsB).toBe(true);
       expect(overlapsC).toBe(false);
     });
 
     it('should encode and decode keyset pagination cursors losslessly', () => {
-      // Arrange
       const rows = [
         { id: '003', at: new Date('2026-01-01T10:00:00.000Z') },
         { id: '002', at: new Date('2026-01-01T10:00:00.000Z') },
         { id: '001', at: new Date('2026-01-01T09:59:59.000Z') },
       ];
 
-      // Act
       const page = toPage(rows, 2, (row) => ({ at: row.at, id: row.id }));
       const decoded = page.next_cursor ? decodeCursor(page.next_cursor) : null;
 
-      // Assert
       expect(page.data).toHaveLength(2);
       expect(decoded).toEqual({
         at: new Date('2026-01-01T10:00:00.000Z'),
@@ -128,13 +128,11 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
     });
 
     it('should detect PNG, JPEG, WEBP, and GIF magic bytes accurately', () => {
-      // Arrange
       const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
       const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
       const webp = Buffer.from('RIFF\x00\x00\x00\x00WEBP', 'ascii');
       const gif = Buffer.from('GIF89a', 'ascii');
 
-      // Act & Assert
       expect(detectImageMimeType(png)).toBe('image/png');
       expect(detectImageMimeType(jpeg)).toBe('image/jpeg');
       expect(detectImageMimeType(webp)).toBe('image/webp');
@@ -143,9 +141,7 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
   });
 
   describe('Block 2: Adverse & Boundary Edge Cases (BVA & State Machine)', () => {
-    it('should reject whitespace-only strings and boundary-plus-one lengths on hero fields', () => {
-      // Arrange
-      const schema = buildHeroCreateSchema('2026-11-12');
+    it('should reject whitespace-only strings and boundary-plus-one lengths on hero fields', async () => {
       const invalidPayload = {
         name: '   \t\n  ',
         nickname: 'A'.repeat(HERO_LIMITS.nickname + 1),
@@ -154,61 +150,56 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
         main_power: 'Voo',
       };
 
-      // Act
-      const result = schema.safeParse(invalidPayload);
-
-      // Assert
-      expect(result.success).toBe(false);
-      const fields = result.success ? [] : result.error.issues.map((i) => i.path.join('.'));
-      expect(fields).toContain('name');
-      expect(fields).toContain('nickname');
+      try {
+        await validateDto(CreateHeroDto, invalidPayload);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(DomainError);
+        const fields = (err as DomainError).extra.fields?.map((f) => f.field) ?? [];
+        expect(fields).toContain('name');
+        expect(fields).toContain('nickname');
+      }
     });
 
-    it('should accept exact maximum field lengths and today as date_of_birth, but reject tomorrow', () => {
-      // Arrange
-      const schema = buildHeroCreateSchema('2026-11-12');
+    it('should accept exact maximum field lengths and today as date_of_birth, but reject tomorrow', async () => {
+      const today = todayIn('America/Sao_Paulo');
       const exactBoundary = {
         name: 'N'.repeat(HERO_LIMITS.name),
         nickname: 'K'.repeat(HERO_LIMITS.nickname),
-        date_of_birth: '2026-11-12',
+        date_of_birth: today,
         universe: 'U'.repeat(HERO_LIMITS.universe),
         main_power: 'P'.repeat(HERO_LIMITS.main_power),
       };
 
-      // Act
-      const validResult = schema.safeParse(exactBoundary);
-      const futureResult = schema.safeParse({ ...exactBoundary, date_of_birth: '2026-11-13' });
+      const validResult = await validateDto(CreateHeroDto, exactBoundary);
+      expect(validResult.name).toHaveLength(HERO_LIMITS.name);
 
-      // Assert
-      expect(validResult.success).toBe(true);
-      expect(futureResult.success).toBe(false);
+      const useCase = new CreateHeroUseCase({} as IHeroRepository);
+      await expect(
+        useCase.execute({ ...exactBoundary, date_of_birth: '2099-11-13' }),
+      ).rejects.toBeInstanceOf(DomainError);
     });
 
     it('should reject impossible calendar dates like Feb 30 or month 13', () => {
-      // Arrange & Act & Assert
-      expect(isCalendarDay('2024-02-29')).toBe(true); // 2024 is a leap year
+      expect(isCalendarDay('2024-02-29')).toBe(true);
       expect(isCalendarDay('2025-02-29')).toBe(false);
       expect(isCalendarDay('2026-02-30')).toBe(false);
       expect(isCalendarDay('2026-13-01')).toBe(false);
     });
 
     it('should resolve todayIn across timezones and fall back cleanly when given an invalid timezone', () => {
-      // Arrange
-      const instant = new Date('2026-11-12T01:30:00.000Z'); // Still 2026-11-11 in America/Sao_Paulo (-03:00)
+      const instant = new Date('2026-11-12T01:30:00.000Z');
 
-      // Act
       const dayInSaoPaulo = todayIn('America/Sao_Paulo', instant);
       const dayInUtc = todayIn('UTC', instant);
       const dayWithInvalidZone = todayIn('Invalid/Zone_Name', instant, 'UTC');
 
-      // Assert
       expect(dayInSaoPaulo).toBe('2026-11-11');
       expect(dayInUtc).toBe('2026-11-12');
       expect(dayWithInvalidZone).toBe('2026-11-12');
     });
 
     it('should enforce mission state machine transitions and reject illegal transitions', () => {
-      // Arrange & Act & Assert
       expect(() => assertCanStart('scheduled', 0)).toThrowError(DomainError);
       expect(() => assertCanStart('in_progress', 2)).toThrowError(DomainError);
       expect(() => assertCanFinish('scheduled')).toThrowError(DomainError);
@@ -220,27 +211,20 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
       expect(() => assertCanModifyRoster('succeeded')).toThrowError(DomainError);
     });
 
-    it('should reject mission creation when ends_at is equal to or before starts_at', () => {
-      // Arrange
+    it('should reject mission creation when ends_at is equal to or before starts_at', async () => {
       const sameTime = {
         title: 'Missão Relâmpago',
         starts_at: '2026-11-03T13:00:00.000Z',
         ends_at: '2026-11-03T13:00:00.000Z',
       };
 
-      // Act
-      const result = missionCreateSchema.safeParse(sameTime);
-
-      // Assert
-      expect(result.success).toBe(false);
+      await expect(validateDto(CreateMissionDto, sameTime)).rejects.toBeInstanceOf(DomainError);
     });
 
     it('should reject CSV files with wrong header, 0 rows, or > 20,000 rows, while isolating single-row errors', () => {
-      // Arrange
       const header = 'name,nickname,date_of_birth,universe,main_power,avatar_url';
       const tooManyRows = `${header}\n${'Bruce,Hulk,1962-04-10,Marvel,Força,\n'.repeat(MAX_CSV_ROWS + 1)}`;
 
-      // Act & Assert
       expect(() => validateAndExtractCsvRows('wrong,header\n1,2')).toThrowError(DomainError);
       expect(() => validateAndExtractCsvRows(`${header}\n`)).toThrowError(DomainError);
       expect(() => validateAndExtractCsvRows(tooManyRows)).toThrowError(DomainError);
@@ -259,10 +243,7 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
   });
 
   describe('Block 3: Security & Adversarial Exploits (AppSec)', () => {
-    it('should strip server-owned fields (mass assignment attempt of id, created_at, updated_at, is_active)', () => {
-      // Arrange
-      const createSchema = buildHeroCreateSchema('2026-11-12');
-      const patchSchema = buildHeroPatchSchema('2026-11-12');
+    it('should strip server-owned fields (mass assignment attempt of id, created_at, updated_at, is_active)', async () => {
       const maliciousPayload = {
         id: '00000000-0000-4000-8000-999999999999',
         name: 'Tony Stark',
@@ -276,11 +257,9 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
         version: 1,
       };
 
-      // Act
-      const created = parseInput(createSchema, maliciousPayload);
-      const patched = parseInput(patchSchema, maliciousPayload);
+      const created = await validateDto(CreateHeroDto, maliciousPayload);
+      const patched = await validateDto(UpdateHeroDto, maliciousPayload);
 
-      // Assert
       expect('id' in created).toBe(false);
       expect('created_at' in created).toBe(false);
       expect('updated_at' in created).toBe(false);
@@ -291,38 +270,33 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
       expect('is_active' in patched).toBe(false);
     });
 
-    it('should reject javascript: and data: URLs in avatar_url and reject null-byte injection in text fields', () => {
-      // Arrange
-      const schema = buildHeroCreateSchema('2026-11-12');
+    it('should reject javascript: and data: URLs in avatar_url and reject null-byte injection in text fields', async () => {
+      await expect(
+        validateDto(CreateHeroDto, {
+          name: 'Peter Parker',
+          nickname: 'Homem-Aranha',
+          date_of_birth: '2001-08-10',
+          universe: 'Marvel',
+          main_power: 'Sentido Aranha',
+          avatar_url: 'javascript:alert(1)',
+        }),
+      ).rejects.toBeInstanceOf(DomainError);
 
-      // Act
-      const xssAttempt = schema.safeParse({
-        name: 'Peter Parker',
-        nickname: 'Homem-Aranha',
-        date_of_birth: '2001-08-10',
-        universe: 'Marvel',
-        main_power: 'Sentido Aranha',
-        avatar_url: 'javascript:alert(1)',
-      });
-      const nullByteAttempt = schema.safeParse({
-        name: 'Peter\u0000Parker',
-        nickname: 'Homem-Aranha',
-        date_of_birth: '2001-08-10',
-        universe: 'Marvel',
-        main_power: 'Sentido Aranha',
-      });
-
-      // Assert
-      expect(xssAttempt.success).toBe(false);
-      expect(nullByteAttempt.success).toBe(false);
+      await expect(
+        validateDto(CreateHeroDto, {
+          name: 'Peter\u0000Parker',
+          nickname: 'Homem-Aranha',
+          date_of_birth: '2001-08-10',
+          universe: 'Marvel',
+          main_power: 'Sentido Aranha',
+        }),
+      ).rejects.toBeInstanceOf(DomainError);
     });
 
     it('should reject disguised SVG/HTML files and oversized payloads in avatar upload', () => {
-      // Arrange
       const disguisedHtml = Buffer.from('<script>alert("xss")</script>', 'utf8');
       const oversizedPng = Buffer.alloc(MAX_AVATAR_BYTES + 1, 0x89);
 
-      // Act & Assert
       expect(() => detectImageMimeType(disguisedHtml)).toThrowError(DomainError);
       try {
         detectImageMimeType(oversizedPng);
@@ -337,17 +311,14 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
     });
 
     it('should reject tampered pagination cursors with a 400 validation error', () => {
-      // Arrange
       const validCursor = encodeCursor({ at: new Date('2026-01-01T00:00:00.000Z'), id: 'abc' });
       const tamperedCursor = `${validCursor.slice(0, -4)}XXXX`;
 
-      // Act & Assert
       expect(() => decodeCursor(tamperedCursor)).toThrowError(DomainError);
       expect(() => decodeCursor('not-valid-base64-json')).toThrowError(DomainError);
     });
 
     it('should enforce the test database isolation circuit breaker against production or dev DB pollution', () => {
-      // Arrange & Act & Assert
       expect(() =>
         assertSafeTestDatabase({
           NODE_ENV: 'production',
@@ -373,4 +344,3 @@ describe('Unit Suite — Domain Rules, Boundary Values & Security Invariants', (
     });
   });
 });
-

@@ -1,0 +1,41 @@
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  decodeCursor,
+  toPage,
+  type Page,
+} from '../../../../core/pagination/keyset-pagination.js';
+import { HeroFacadeService } from '../../../heroes/index.js';
+import type { MissionEntity } from '../../domain/entities/mission.entity.js';
+import {
+  MISSION_REPOSITORY_TOKEN,
+  type IMissionRepository,
+} from '../../domain/ports/mission-repository.port.js';
+import type { ListMissionsQueryDto } from '../../infrastructure/dtos/list-missions-query.dto.js';
+
+@Injectable()
+export class ListMissionsUseCase {
+  constructor(
+    @Inject(MISSION_REPOSITORY_TOKEN)
+    private readonly missionRepo: IMissionRepository,
+    @Inject(HeroFacadeService)
+    private readonly heroFacade: HeroFacadeService,
+  ) {}
+
+  async execute(query: ListMissionsQueryDto): Promise<Page<MissionEntity>> {
+    const heroId = query.hero_id
+      ? this.heroFacade.parseHeroId(query.hero_id)
+      : null;
+    const after = query.cursor ? decodeCursor(query.cursor) : null;
+    const records = await this.missionRepo.list({
+      status: query.status ?? null,
+      heroId,
+      after,
+      limit: query.limit + 1,
+    });
+    return toPage(records, query.limit, (mission) => ({
+      at: mission.starts_at,
+      id: mission.id,
+    }));
+  }
+}
+
