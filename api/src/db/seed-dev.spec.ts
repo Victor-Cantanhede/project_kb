@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { validateImageMagicBytes } from '../features/avatars/domain/utils/image-magic-bytes.validator.js';
 import {
   buildShowcaseMissions,
-  createSolidPng,
+  createHeroAvatarPng,
   SHOWCASE_AVATARS,
   SHOWCASE_HEROES,
   SHOWCASE_HISTORY,
@@ -29,7 +29,7 @@ describe('seed-dev fixtures', () => {
 
   it('generates valid PNG buffers accepted by validateImageMagicBytes', () => {
     for (const avatar of SHOWCASE_AVATARS) {
-      const png = createSolidPng(avatar.rgb);
+      const png = createHeroAvatarPng(avatar);
       expect(validateImageMagicBytes(png)).toBe('image/png');
     }
   });

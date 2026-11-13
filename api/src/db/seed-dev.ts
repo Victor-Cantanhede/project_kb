@@ -13,9 +13,18 @@ export interface SeedDevSummary {
   readonly imports: number;
 }
 
+export type RGB = readonly [number, number, number];
+
 export interface ShowcaseAvatarDef {
   readonly id: string;
-  readonly rgb: readonly [number, number, number];
+  readonly bgTop: RGB;
+  readonly bgBottom: RGB;
+  readonly suit: RGB;
+  readonly skin: RGB;
+  readonly mask: RGB;
+  readonly eyes: RGB;
+  readonly accent: RGB;
+  readonly crown?: 'ears' | 'tiara' | 'crest' | 'horns';
 }
 
 export interface ShowcaseHeroDef {
@@ -63,14 +72,14 @@ export interface ShowcaseImportDef {
   readonly created_at: Date;
 }
 
-// Deterministic v4-compatible UUIDs so repeated seed runs hit PRIMARY KEY / INSERT IGNORE cleanly.
+// Deterministic v4-compatible UUIDs; 8001 busts the immutable 1-year browser cache on older seeded DBs.
 export const AVATAR_IDS = {
-  iron: '10000000-0000-4000-8000-000000000001',
-  wonder: '10000000-0000-4000-8000-000000000002',
-  hulk: '10000000-0000-4000-8000-000000000003',
-  spider: '10000000-0000-4000-8000-000000000004',
-  scarlet: '10000000-0000-4000-8000-000000000005',
-  panther: '10000000-0000-4000-8000-000000000006',
+  iron: '10000000-0000-4000-8001-000000000001',
+  wonder: '10000000-0000-4000-8001-000000000002',
+  hulk: '10000000-0000-4000-8001-000000000003',
+  spider: '10000000-0000-4000-8001-000000000004',
+  scarlet: '10000000-0000-4000-8001-000000000005',
+  panther: '10000000-0000-4000-8001-000000000006',
 } as const;
 
 export const HERO_IDS = {
@@ -89,12 +98,70 @@ export const HERO_IDS = {
 } as const;
 
 export const SHOWCASE_AVATARS: readonly ShowcaseAvatarDef[] = [
-  { id: AVATAR_IDS.iron, rgb: [185, 28, 28] },
-  { id: AVATAR_IDS.wonder, rgb: [29, 78, 216] },
-  { id: AVATAR_IDS.hulk, rgb: [21, 128, 61] },
-  { id: AVATAR_IDS.spider, rgb: [220, 38, 38] },
-  { id: AVATAR_IDS.scarlet, rgb: [159, 18, 57] },
-  { id: AVATAR_IDS.panther, rgb: [30, 41, 59] },
+  {
+    id: AVATAR_IDS.iron,
+    bgTop: [127, 29, 29],
+    bgBottom: [24, 24, 27],
+    suit: [185, 28, 28],
+    skin: [250, 204, 21],
+    mask: [127, 29, 29],
+    eyes: [125, 211, 252],
+    accent: [56, 189, 248],
+    crown: 'crest',
+  },
+  {
+    id: AVATAR_IDS.wonder,
+    bgTop: [30, 58, 138],
+    bgBottom: [15, 23, 42],
+    suit: [185, 28, 28],
+    skin: [245, 208, 181],
+    mask: [30, 41, 59],
+    eyes: [254, 240, 138],
+    accent: [250, 204, 21],
+    crown: 'tiara',
+  },
+  {
+    id: AVATAR_IDS.hulk,
+    bgTop: [20, 83, 45],
+    bgBottom: [9, 34, 22],
+    suit: [109, 40, 217],
+    skin: [74, 222, 128],
+    mask: [20, 83, 45],
+    eyes: [236, 253, 245],
+    accent: [167, 139, 250],
+  },
+  {
+    id: AVATAR_IDS.spider,
+    bgTop: [185, 28, 28],
+    bgBottom: [23, 37, 84],
+    suit: [29, 78, 216],
+    skin: [220, 38, 38],
+    mask: [15, 23, 42],
+    eyes: [248, 250, 252],
+    accent: [248, 250, 252],
+  },
+  {
+    id: AVATAR_IDS.scarlet,
+    bgTop: [159, 18, 57],
+    bgBottom: [39, 9, 27],
+    suit: [136, 19, 55],
+    skin: [248, 220, 208],
+    mask: [76, 5, 25],
+    eyes: [253, 164, 175],
+    accent: [244, 63, 94],
+    crown: 'horns',
+  },
+  {
+    id: AVATAR_IDS.panther,
+    bgTop: [51, 65, 85],
+    bgBottom: [15, 23, 42],
+    suit: [30, 41, 59],
+    skin: [17, 24, 39],
+    mask: [51, 65, 85],
+    eyes: [196, 181, 253],
+    accent: [203, 213, 225],
+    crown: 'ears',
+  },
 ];
 
 const SHOWCASE_BASE = Date.UTC(2026, 0, 15, 12, 0, 0);
@@ -455,7 +522,41 @@ function pngChunk(type: string, data: Buffer): Buffer {
   return Buffer.concat([lenBuf, crcInput, crcBuf]);
 }
 
-export function createSolidPng(rgb: readonly [number, number, number], size = 32): Buffer {
+const clamp = (v: number, min: number, max: number): number => (v < min ? min : v > max ? max : v);
+const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
+const sdRoundedBox = (px: number, py: number, bx: number, by: number, r: number): number => {
+  const qx = Math.abs(px) - bx + r;
+  const qy = Math.abs(py) - by + r;
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
+};
+const sdTriangle = (
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+): number => {
+  const seg = (x0: number, y0: number, x1: number, y1: number) => {
+    const ex = x1 - x0;
+    const ey = y1 - y0;
+    const wx = px - x0;
+    const wy = py - y0;
+    const t = clamp((wx * ex + wy * ey) / (ex * ex + ey * ey), 0, 1);
+    return { dx: wx - ex * t, dy: wy - ey * t, c: ex * wy - ey * wx };
+  };
+  const s1 = seg(ax, ay, bx, by);
+  const s2 = seg(bx, by, cx, cy);
+  const s3 = seg(cx, cy, ax, ay);
+  const d = Math.min(s1.dx * s1.dx + s1.dy * s1.dy, s2.dx * s2.dx + s2.dy * s2.dy, s3.dx * s3.dx + s3.dy * s3.dy);
+  const s = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) >= 0 ? 1 : -1;
+  const inside = Math.min(s * s1.c, s * s2.c, s * s3.c) > 0;
+  return (inside ? -1 : 1) * Math.sqrt(d);
+};
+
+export function createHeroAvatarPng(avatar: ShowcaseAvatarDef, size = 200): Buffer {
   const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const ihdr = Buffer.allocUnsafe(13);
   ihdr.writeUInt32BE(size, 0);
@@ -468,15 +569,54 @@ export function createSolidPng(rgb: readonly [number, number, number], size = 32
 
   const stride = 1 + size * 3;
   const raw = Buffer.allocUnsafe(stride * size);
-  for (let y = 0; y < size; y += 1) {
-    const rowStart = y * stride;
+  const blend = (r: number, g: number, b: number, fg: RGB, d: number): [number, number, number] => {
+    const a = clamp(0.5 - d, 0, 1);
+    return a <= 0 ? [r, g, b] : [mix(r, fg[0], a), mix(g, fg[1], a), mix(b, fg[2], a)];
+  };
+
+  for (let py = 0; py < size; py += 1) {
+    const rowStart = py * stride;
     raw[rowStart] = 0; // filter type None
-    for (let x = 0; x < size; x += 1) {
-      const px = rowStart + 1 + x * 3;
-      const border = x < 3 || y < 3 || x >= size - 3 || y >= size - 3;
-      raw[px] = border ? 245 : rgb[0];
-      raw[px + 1] = border ? 245 : rgb[1];
-      raw[px + 2] = border ? 245 : rgb[2];
+    const y = ((py + 0.5) / size) * 200;
+    for (let px = 0; px < size; px += 1) {
+      const x = ((px + 0.5) / size) * 200;
+      const mx = 100 + Math.abs(x - 100);
+      const grad = clamp(y / 200 * 0.75 + Math.hypot(x - 100, y - 92) / 220, 0, 1);
+      let r = mix(avatar.bgTop[0], avatar.bgBottom[0], grad);
+      let g = mix(avatar.bgTop[1], avatar.bgBottom[1], grad);
+      let b = mix(avatar.bgTop[2], avatar.bgBottom[2], grad);
+
+      // Soft torso & chest emblem
+      const torsoDist = Math.hypot((x - 100) / 76, (y - 196) / 56) - 1;
+      [r, g, b] = blend(r, g, b, avatar.suit, torsoDist * 56);
+      const emblemDist =
+        avatar.crown === 'crest'
+          ? Math.hypot(x - 100, y - 175) - 11
+          : Math.abs(x - 100) + Math.abs(y - 175) - 13;
+      [r, g, b] = blend(r, g, b, avatar.accent, emblemDist);
+
+      // Headgear silhouette behind head
+      if (avatar.crown === 'ears') {
+        [r, g, b] = blend(r, g, b, avatar.skin, sdTriangle(mx, y, 141, 82, 150, 34, 114, 62));
+      } else if (avatar.crown === 'horns') {
+        [r, g, b] = blend(r, g, b, avatar.accent, sdTriangle(mx, y, 134, 78, 156, 34, 114, 62));
+      } else if (avatar.crown === 'crest') {
+        [r, g, b] = blend(r, g, b, avatar.suit, sdRoundedBox(x - 100, y - 62, 11, 16, 5));
+      }
+
+      // Head, mask visor, glowing eyes & optional forehead tiara
+      [r, g, b] = blend(r, g, b, avatar.skin, Math.hypot(x - 100, y - 104) - 48);
+      [r, g, b] = blend(r, g, b, avatar.mask, sdRoundedBox(x - 100, y - 98, 42, 13, 12));
+      [r, g, b] = blend(r, g, b, avatar.eyes, sdRoundedBox(mx - 120, y - 98, 9, 5.5, 5));
+      if (avatar.crown === 'tiara') {
+        [r, g, b] = blend(r, g, b, avatar.accent, sdRoundedBox(x - 100, y - 69, 32, 4.5, 3));
+        [r, g, b] = blend(r, g, b, avatar.accent, Math.abs(x - 100) + Math.abs(y - 69) - 9);
+      }
+
+      const out = rowStart + 1 + px * 3;
+      raw[out] = Math.round(r);
+      raw[out + 1] = Math.round(g);
+      raw[out + 2] = Math.round(b);
     }
   }
 
@@ -494,12 +634,12 @@ export async function seedDevData(pool: Pool, anchor: Date = new Date()): Promis
   const avatarRows = SHOWCASE_AVATARS.map((avatar) => [
     avatar.id,
     'image/png',
-    createSolidPng(avatar.rgb),
+    createHeroAvatarPng(avatar),
     avatarNow,
   ]);
   const avatarRes = await execute(
     pool,
-    'INSERT IGNORE INTO avatars (id, mime_type, content, created_at) VALUES ?',
+    'INSERT INTO avatars (id, mime_type, content, created_at) VALUES ? ON DUPLICATE KEY UPDATE content = VALUES(content)',
     [avatarRows],
   );
 
@@ -528,6 +668,18 @@ export async function seedDevData(pool: Pool, anchor: Date = new Date()): Promis
 
   // Resolve actual IDs in case a showcase hero already existed under another UUID (uq_heroes_identity).
   const showcaseIds = SHOWCASE_HEROES.map((hero) => hero.id);
+  const legacyPrefix = '/api/avatars/10000000-0000-4000-8000-00000000000';
+  const currentPrefix = '/api/avatars/10000000-0000-4000-8001-00000000000';
+  await execute(
+    pool,
+    'UPDATE heroes SET avatar_url = REPLACE(avatar_url, ?, ?) WHERE id IN (?) AND avatar_url LIKE ?',
+    [legacyPrefix, currentPrefix, showcaseIds, `${legacyPrefix}%`],
+  );
+  await execute(
+    pool,
+    "UPDATE hero_history SET new_value = REPLACE(new_value, ?, ?) WHERE hero_id IN (?) AND field = 'avatar_url' AND new_value LIKE ?",
+    [legacyPrefix, currentPrefix, showcaseIds, `${legacyPrefix}%`],
+  );
   const presentRows = await selectRows(
     pool,
     z.object({ id: z.string() }),

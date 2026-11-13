@@ -5,7 +5,7 @@ import {
   type AsyncState,
   type Page,
 } from '../../../lib/index.js';
-import type { Mission, MissionStatus } from '../../missions/types/missions.types.js';
+import type { Mission, MissionStatus } from '../../missions/index.js';
 import { HeroesApiService } from '../services/heroes-api.service.js';
 import type { Hero, HeroHistoryEntry, HistoryField } from '../types/heroes.types.js';
 

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
+    "dev": "node scripts/dev.mjs",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
@@ -28,13 +28,11 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@fastify/multipart": "^10.1.8",
     "@nestjs/cli": "^11.0.5",
     "@nestjs/schematics": "^11.0.2",
     "@types/busboy": "^1.5.4",
     "@types/express": "^5.0.0",
     "@types/node": "^26.6.6",
-    "fastify": "^5.12.8",
     "light-my-request": "^6.0.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

@@ -57,4 +57,5 @@ export { UpdateHeroDto } from './infrastructure/dtos/update-hero.dto.js';
 export { ListHeroesQueryDto } from './infrastructure/dtos/list-heroes-query.dto.js';
 export { ListHeroHistoryQueryDto } from './infrastructure/dtos/list-hero-history-query.dto.js';
 export { HeroResponseDto } from './infrastructure/dtos/hero-response.dto.js';
+export { isValidAvatarUrl, IsValidAvatarUrl } from './infrastructure/validators/is-valid-avatar-url.decorator.js';
 export { HeroesController } from './presentation/heroes.controller.js';

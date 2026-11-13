@@ -2,7 +2,8 @@ import { assertUnreachable } from '../../../lib/index.js';
 import {
   formatLocalDateTime,
   MISSION_STATUS_LABELS,
-} from '../../missions/utils/mission-formatters.js';
+  type MissionStatus,
+} from '../../missions/index.js';
 import { useHeroDetails } from '../hooks/use-hero-details.js';
 import type { Hero, HistoryField } from '../types/heroes.types.js';
 import {
@@ -241,7 +242,7 @@ export function HeroDetailsModal({ hero, onClose }: HeroDetailsModalProps) {
                 className="select-compact"
                 value={missionFilter}
                 onChange={(e) =>
-                  handleMissionFilterChange(e.target.value as any)
+                  handleMissionFilterChange(e.target.value as MissionStatus | '')
                 }
               >
                 {MISSION_FILTER_OPTIONS.map((opt) => (

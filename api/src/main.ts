@@ -6,6 +6,7 @@ import { createPool } from './core/database/mysql-database.service.js';
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   PORT: z.coerce.number().int().positive().default(3000),
+  HOST: z.string().default('127.0.0.1'),
   INSTANCE_ID: z.string().default('api-local'),
 });
 
@@ -22,5 +23,5 @@ const closeGracefully = async (): Promise<void> => {
 process.on('SIGINT', () => void closeGracefully());
 process.on('SIGTERM', () => void closeGracefully());
 
-await instance.app.listen(env.PORT, '0.0.0.0');
-console.log(`[${env.INSTANCE_ID}] API ouvindo na porta ${env.PORT}`);
+await instance.app.listen(env.PORT, env.HOST);
+console.log(`[${env.INSTANCE_ID}] API ouvindo em ${env.HOST}:${env.PORT}`);

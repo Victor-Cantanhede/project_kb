@@ -6,6 +6,7 @@ x-api: &api
   environment: &api-env
     DATABASE_URL: mysql://hero:hero@mysql:3306/hero_factory
     PORT: "3000"
+    HOST: "0.0.0.0"
   restart: unless-stopped
   depends_on:
     migrate:

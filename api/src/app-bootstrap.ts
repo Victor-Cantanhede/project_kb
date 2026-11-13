@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import type { LogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import express, { type NextFunction, type Request, type Response } from 'express';
@@ -16,14 +17,23 @@ export interface AppInstance {
   close(): Promise<void>;
 }
 
+export interface CreateNestAppOptions {
+  readonly logger?: LogLevel[] | false;
+}
+
 export async function createNestApp(
   pool?: Pool,
   instanceId = process.env.INSTANCE_ID ?? 'api-local',
+  options?: CreateNestAppOptions,
 ): Promise<AppInstance> {
+  const logger: LogLevel[] | false =
+    options?.logger ??
+    (process.env.NODE_ENV === 'test' ? false : ['log', 'warn', 'error']);
+
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule.register(pool),
     {
-      logger: false,
+      logger,
       bodyParser: false,
     },
   );

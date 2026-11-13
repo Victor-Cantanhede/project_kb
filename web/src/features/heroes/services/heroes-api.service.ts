@@ -1,5 +1,5 @@
 import { request, type Page } from '../../../lib/index.js';
-import type { Mission, MissionStatus } from '../../missions/types/missions.types.js';
+import type { Mission, MissionStatus } from '../../missions/index.js';
 import type {
   Hero,
   HeroHistoryEntry,

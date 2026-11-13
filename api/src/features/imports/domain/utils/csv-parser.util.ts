@@ -1,8 +1,7 @@
 import { parse } from 'csv-parse/sync';
 import { z } from 'zod';
 import { DomainError, validationError } from '../../../../core/errors/domain.exception.js';
-import { isCalendarDay, type HeroBatchInsertInput } from '../../../heroes/index.js';
-import { isValidAvatarUrl } from '../../../heroes/infrastructure/validators/is-valid-avatar-url.decorator.js';
+import { isCalendarDay, isValidAvatarUrl, type HeroBatchInsertInput } from '../../../heroes/index.js';
 import type { ImportRowError } from '../entities/hero-import-job.entity.js';
 
 export const MAX_CSV_ROWS = 20_000;

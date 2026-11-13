@@ -6,6 +6,9 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "clean": "node scripts/clean.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "npm --prefix api run dev",
+    "dev:web": "npm --prefix web run dev",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f",
